@@ -1,0 +1,31 @@
+version: "2.4"
+services:
+  mn:
+    restart: always
+    init: true
+    build: ./containers/aka
+    volumes:
+      - "./data:/home/akroma/.akroma:rw"
+    pids_limit: 75
+    ports:
+      - "10000:8545"
+      - "30303:30303"
+#    security_opt:
+#      - apparmor=aka-armor
+
+  nginx:
+    restart: always
+    build: ./containers/nginx
+    ports:
+      - "80:8080"
+      - "443:8443"
+    volumes:
+      - "./letsencrypt:/certs:rw"
+      - "./containers/nginx/conf.d:/etc/nginx/conf.d:ro"
+      - "./containers/nginx/nginx.conf:/etc/nginx/nginx.conf:ro"
+      - "./containers/nginx/blockuseragents.rules:/etc/nginx/blockuseragents.rules:ro"
+    links:
+      - mn:mn
+    pids_limit: 75
+#    security_opt:
+#      - apparmor=nginx-armor

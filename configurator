@@ -1,0 +1,469 @@
+#!/bin/sh
+PATHTOCONFIGURATOR=$(readlink -f "$0")
+BASEDIR=$(dirname "$PATHTOCONFIGURATOR")
+composeFile="$BASEDIR/docker-compose.yml"
+certbotComposeFile="$BASEDIR/containers/certbot/docker-compose.yml"
+AKA_CONF="$BASEDIR/containers/nginx/conf.d/aka.conf"
+
+script_usage() {
+    cat << EOF
+                    == AKROMA MN CONFIGURATOR ==
+
+Usage:
+    -h|--help                           Displays this help message.
+
+    -dau|--disable-auto-update          Removes auto update from cron job
+    -gd|--grant-docker                  Adds CURRENT user into docker group, so you can control docker without sudo and autoupdate
+    -gd=[user]|--grant-docker=[user]    Adds SPECIFIC user into docker group, so you can control docker without sudo and autoupdate
+    --nodeid=[nodeid]                   Sets RemoteNode NODEID to [nodeid]
+    --data=[data]                       Sets RemoteNode DATA to [data]
+    -p=[port]|--port=[port]             Sets MN rpc listening port to [port]
+    --user=[user]                       Creates user if not exists and starts docker from this user. (docker rights are asigned automatically)
+    --email=[email]                     Sets email used to obtain valid certificates *REQUIRED ONCE*
+
+    -f|--full                           Runs all of the commands below.
+
+    -sd|--setup-dependencies            Installs masternode dependencies
+    -mn|--setup-masternode              Rebuilds and starts masternode
+    -c|--certificates                   Tryes to get valid certificates/displayes challenge
+    -rb|--rebuild                       Same as -mn|--setup-masternode 
+    -nc|--no-cache                      Affects MN build
+    -r|--restart                        Restarts masternode
+    -u|--update                         Upgrades akroma masternode to latest stable version
+    -rp|--restore-permissions           Restores required chmod +x and directory permissions
+    -i|--node-info                      Prints node information - enodeid, version
+    -au|--auto-update                   Adds cron job for auto update
+                                        * requires docker rights for current user (use -gd|--grant-docker)
+    -au=[user]|--auto-update=[user]     Adds cron job for auto update to SPECIFIC user crontable
+                                        * requires docker rights for SPECIFIC user (use -gd=[user]|--grant-docker=[user])
+    -s|--status                         tests and reports status of masternode
+
+    EXAMPLES:
+    # initial variable setup
+    ./configurator --data=[data] --nodeid=[nodeid] --email=[email]
+
+    # setup as root
+    1. setup as root with autoupdate
+    ./configurator -f
+    2. setup as root, running on [user] with autoupdate, on port [port]
+    ./configurator -f --user=[user] --port=[port]
+
+    # setup as non root (requires sudo)
+    1. setup as non root for current user with autoupdate
+    sudo ./configurator -f
+    2. setup as non root, running on [user] with autoupdate, on port [port]
+    sudo ./configurator -f --user=[user] --port=[port]
+EOF
+}
+
+success() {
+    echo "\033[0;32m$1\033[0m"
+}
+
+info() {
+    echo "\033[0;36m$1\033[0m"
+}
+
+warn() {
+    echo "\033[0;33m$1\033[0m"
+}
+
+error() {
+    echo "\033[0;31m$1\033[0m"
+}
+
+require_root_priv() {
+    if [ ! `id -u` = 0 ] ; then
+        error "This option requires root (or sudo) privilages"
+        exit 1
+    fi
+}
+
+require_docker_priv() {
+    if [ "$(groups | grep "docker" || echo "true")" = "true" ] && [ "$(groups | grep "root" || echo "true")" = "true" ]; then
+        error "This option requires docker privilages. Either run configurator as root or grant user docker privilages."
+        info "HINT: sudo ./configurator --grant-docker"
+        exit 2
+    fi
+}
+
+build_mn() {
+    echo "Building aka masternode..."
+    if [ ! "$user" = "true" ]; then
+        require_docker_priv
+        docker-compose -f "$composeFile" build $noCache
+    fi
+}
+
+start_mn() {
+    echo "Starting aka masternode..."
+    if [ ! "$user" = "true" ]; then
+        require_docker_priv
+        docker-compose -f "$composeFile" up -d --force-recreate && \
+            echo "waiting (15s) for MN to start..."
+        sleep 15
+        info=true
+    fi
+}
+
+set_certs_email() {
+    temp=$(sed "s/.*- email=.*/      - email=$EMAIL/g" "$certbotComposeFile")
+    echo "$temp" > "$certbotComposeFile"
+}
+
+set_mn_nodeid() {
+    temp=$(sed "s/NODEID/$NODEID/g" "$AKA_CONF")
+    echo "$temp" > "$AKA_CONF"
+    temp=$(sed "s/.*- NODEID=.*/      - NODEID=$NODEID/g" "$certbotComposeFile")
+    echo "$temp" > "$certbotComposeFile"
+
+    grep "NODEID: " "$BASEDIR\remote-node.info" && \
+    (temp=$(sed "s/NODEID: .*/NODEID: $NODEID/g" "$BASEDIR\remote-node.info"); echo "$temp" > "$BASEDIR\remote-node.info") || \
+    echo "NODEID: $NODEID" >> "$BASEDIR\remote-node.info"
+}
+
+set_mn_data() {
+    temp=$(sed "s/DATA/$DATAID/g" "$AKA_CONF")
+    echo "$temp" > "$AKA_CONF"
+
+    grep "DATA: " "$BASEDIR\remote-node.info" && \
+    (temp=$(sed "s/DATA: .*/DATA: $DATAID/g" "$BASEDIR\remote-node.info"); echo "$temp" > "$BASEDIR\remote-node.info") || \
+    echo "DATA: $DATAID" >> "$BASEDIR\remote-node.info"
+}
+
+set_mn_port() {
+    temp=$(sed "s/.*- \".*:8545\".*/      - \"$1:8545\"/" $composeFile)
+    echo "$temp" > $composeFile
+}
+
+get_certs() {
+    docker-compose -f "$certbotComposeFile" run certbot
+    return $?
+}
+
+parse_params() {
+    while :; do
+        case $1 in
+            -h|--help)
+                script_usage
+                exit 0
+                ;;
+            -f|--full)
+                force=true
+                noCache="--no-cache"
+                shift
+                ;;
+            -sd|--setup-dependencies)
+                dependencies=true
+                shift
+                ;;
+            -mn|--setup-masternode)
+                build=true
+                start=true
+                shift
+                ;; 
+            -rb|--rebuild)
+                build=true
+                start=true
+                shift
+                ;; 
+            -r|--restart)
+                start=true
+                shift
+                ;;        
+            -u|--update)
+                update=true
+                shift
+                ;;
+            -au|--auto-update)
+                autoUpdate=true
+                shift
+                ;;
+            -au=*|--auto-update=*)
+                autoUpdate=true
+                SPECIFIC_USER=$(echo $1 | sed 's/-au=//g')
+                SPECIFIC_USER=$(echo $SPECIFIC_USER | sed 's/--auto-update=//g')
+                shift
+                ;;           
+            -dau|--disable-auto-update)
+                disableAutoUpdate=true
+                shift
+                ;;
+            -nu|--no-update)
+                noupdate=true
+                shift
+                ;;
+            -rp|--restore-permissions)
+                restorePermisions=true
+                shift
+                ;;
+            -gd|--grant-docker)
+                grantDocker=true
+                shift
+                ;;
+            -gd=*|--grant-docker=*)
+                grantDocker=true
+                SPECIFIC_USER=$(echo $1 | sed 's/-gd=//g')
+                SPECIFIC_USER=$(echo $SPECIFIC_USER | sed 's/--grant-docker=//g')
+                shift
+                ;;
+            -nc|--no-cache)
+                noCache="--no-cache"
+                shift
+                ;;
+            -i|--node-info)
+                info=true
+                shift
+                ;;
+            -c|--certificates)
+                certs=true
+                shift
+                ;;
+            -e=*|--email=*)
+                EMAIL=$(echo $1 | sed 's/-e=//g')
+                EMAIL=$(echo $EMAIL | sed 's/--email=//g')
+                shift
+                ;;
+            --nodeid=*)
+                NODEID=$(echo $1 | sed 's/--nodeid=//g')
+                shift
+                ;;
+            --data=*)
+                DATAID=$(echo $1 | sed 's/--data=//g')
+                shift
+                ;;
+            -p=*|--port=*)
+                port=$(echo $1 | sed 's/-p=//g')
+                port=$(echo $port | sed 's/--port=//g')
+                shift
+                ;;
+            --user=*)
+                user=true
+                grantDocker=true
+                SPECIFIC_USER=$(echo $1 | sed 's/--user=//g')
+                shift
+                ;;
+            -s|--status)
+                status=true
+                shift
+                ;;
+            -?*)
+                echo "Invalid parameter was provided: $1"
+                exit 2
+                ;;
+            *)
+                break;
+        esac
+    done
+}
+parse_params "$@"
+
+USER=$(who am i | awk '{print $1}')
+if [ ! -z "$SPECIFIC_USER" ]; then 
+    USER=$SPECIFIC_USER 
+fi
+
+if [ "$user" = "true" ]; then
+    require_root_priv
+    id -u $USER > /dev/null || useradd $USER -m -s /bin/sh && usermod -a -G docker $USER
+    id -u $USER > /dev/null && success "$USER created." || (error "Failed to create $USER" && exit 4)
+fi
+
+if [ ! -z ${port} ]; then 
+    set_mn_port $port
+    grep "\- \"$port:8545\"" $composeFile > /dev/null && success "MN port set to $port" || (error "Failed to set MN port to $port" && exit 5)
+fi
+
+if [ "$force" = "true" ] || [ "$dependencies" = "true" ]; then
+    require_root_priv
+    apt update && apt upgrade -q -y
+    apt install -y apt-transport-https ca-certificates curl software-properties-common unzip jq openssl
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
+    apt-key fingerprint 0EBFCD88
+    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+    apt update && apt install -y docker-ce
+    docker run hello-world
+    curl -L https://github.com/docker/compose/releases/download/1.21.2/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
+    chmod +x /usr/local/bin/docker-compose
+    docker-compose --version
+
+    # generate dhparam if needed
+    if [ ! -f "$BASEDIR/letsencrypt/dhparam.pem" ]; then
+        echo "Generating dhparam..."
+        openssl dhparam -dsaparam -out "$BASEDIR/letsencrypt/dhparam.pem" 2048
+    fi
+
+    # generate dummy certificates if needed
+    if [ ! -f "$BASEDIR/letsencrypt/privkey.pem" ] || [ ! -f "$BASEDIR/letsencrypt/fullchain.pem" ]; then
+        echo "Generating dummy certificates..."
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout "$BASEDIR/letsencrypt/privkey.pem" -out "$BASEDIR/letsencrypt/fullchain.pem" \
+        -subj "/C=WW/ST=WW/L=WW/O=operator/CN=remote.akroma.io"
+        warn "...dummy certificates created. Please remember, that they are not valid and cause ssl errors."
+        echo "These certificates are temporary and has to be replaced with valid ones to ensure proper functionality of RemoteNode" > rm -f "/etc/letsencrypt/temp.certs"
+    fi
+fi
+
+if [ "$force" = "true" ] || [ "$restorePermisions" = "true" ]; then
+    require_root_priv
+    chmod +x "$PATHTOCONFIGURATOR" \
+        "$BASEDIR/tools/allow-container-write.sh" \
+        "$BASEDIR/tools/get-node-info.sh"
+    "$BASEDIR/tools/allow-container-write.sh" -f -p "$BASEDIR/data"
+    "$BASEDIR/tools/allow-container-write.sh" -f -p "$BASEDIR/letsencrypt"
+fi
+
+if [ ! -z "$NODEID" ]; then 
+    set_mn_nodeid
+    (grep "return 200 $NODEID." $AKA_CONF > /dev/null && grep "      - NODEID=$NODEID" "$certbotComposeFile" > /dev/null) && success "RemoteNode NODEID set to $NODEID" || (error "Failed to set RemoteNode NODEID to $NODEID" && exit 5)
+fi
+
+if [ ! -z "$DATAID" ]; then 
+    set_mn_data
+    grep ".$DATAID;" $AKA_CONF > /dev/null && success "RemoteNode DATA set to $DATAID" || (error "Failed to set RemoteNode DATA to $DATAID" && exit 6)
+fi
+
+if [ ! -z "$EMAIL" ]; then 
+    set_certs_email
+    grep "      - email=$EMAIL" "$certbotComposeFile" > /dev/null && success "RemoteNode EMAIL set to $NODEID" || (error "Failed to set RemoteNode EMAIL to $NODEID" && exit 7)
+fi
+
+if [ "$grantDocker" = "true" ]; then
+    if [ "$(groups $USER | grep "docker" || echo "true")" = "true" ] && [ "$(groups $USER | grep "root" || echo "true")" = "true" ]; then
+        require_root_priv
+        usermod -a -G docker $USER
+        if [ "$(groups $USER | grep "docker" || echo "true")" = "true" ] && [ "$(groups $USER | grep "root" || echo "true")" = "true" ]; then
+            error "Failed to set docker privilages for user $USER"
+        else 
+            success "Docker privilages granted to $USER"  
+        fi
+    else 
+        success "Docker privilages are already granted to $USER"
+    fi
+fi
+
+if [ "$force" = "true" ] || [ "$certs" = "true" ]; then
+    require_docker_priv
+    get_certs
+    retval=$?
+    if [ "$retval" = 0 ]; then
+        success "SSL certificates validated."
+    elif [ "$retval" = 1 ]; then
+        success "SSL certificates updated. RemoteNode will be reloaded."
+        start=true
+    elif [ "$retval" = 3 ]; then
+        error "Failed to create challenge. Please check output above..."
+        exit 8
+    else
+        error "Failed to get ssl certificates!"
+        printCertbotOutput=true
+    fi
+fi
+
+if [ "$force" = "true" ] || [ "$build" = "true" ]; then
+    build_mn
+fi
+
+if [ "$force" = "true" ] || [ "$start" = "true" ]; then
+    start_mn
+fi
+
+if [ "$update" = "true" ]; then
+    require_docker_priv
+    echo "Checking for update..."
+    container=$(docker-compose -f "$BASEDIR/docker-compose.yml" ps -q)
+    if [ -z "$container" ]; then 
+        error "Cannot update non running masternode."
+        exit 3
+    fi
+    
+    if [ -f "$BASEDIR/data/node.info" ]; then
+        ver=$(docker exec -it $container curl -L -s "https://raw.githubusercontent.com/akroma-project/akroma/master/versions.json" | jq '.stable' --raw-output)
+        if grep -q "version: $ver" "$BASEDIR/data/node.info"; then
+            success "You are running latest stable version."
+        else 
+            echo "Updating to latest aka masternode..."
+            noCache="--no-cache"
+            build_mn
+            start_mn
+            if grep -q "version: $ver" "$BASEDIR/data/node.info"; then
+                success "Masternode updated to latest version."
+            else 
+                error "Failed to update masternode."
+            fi
+        fi
+    fi
+fi
+
+if [ "$force" = "true" ] || [ "$autoUpdate" = "true" ]; then
+    if [ ! "$disableAutoUpdate" = "true" ]; then
+        crontab -u $USER -l > "temp.cron"
+        grep "59 23 \* \* \* \"$PATHTOCONFIGURATOR\" -u -c" "temp.cron" > /dev/null || echo "59 23 * * * \"$PATHTOCONFIGURATOR\" -u -c" >> "temp.cron"
+        crontab -u $USER "temp.cron"
+        rm "temp.cron"
+        crontab -u $USER -l | grep "\"$PATHTOCONFIGURATOR\" -u -c" > /dev/null && success "Auto update configured." || error "Failed to configure auto update." 
+        if [ "$(groups $USER | grep "docker" || echo "true")" = "true" ] && [ "$(groups $USER | grep "root" || echo "true")" = "true" ]; then
+            warn "User $USER does not have docker privilages and wont be able to auto update."
+            info "HINT: sudo ./configurator --grant-docker $USER"
+        fi
+    fi
+fi
+
+if [ "$disableAutoUpdate" = "true" ]; then
+    crontab -u $USER -l | grep -v "\"$PATHTOCONFIGURATOR\" -u -c" | crontab -u $USER -
+    crontab -u $USER -l | grep "\"$PATHTOCONFIGURATOR\" -u -c" && error "Failed to disable auto update." || success "Auto updated disabled" 
+fi
+
+if [ "$user" = "true" ]; then
+    if [ "$force" = "true" ] || [ "$build" = "true" ]; then
+        runuser -l $USER -c "sh \"$PATHTOCONFIGURATOR\" -mn"
+        exit 0
+    elif [ "$start" = "true" ]; then
+        runuser -l $USER -c "sh \"$PATHTOCONFIGURATOR\" -s"
+        exit 0
+    fi
+fi
+
+if [ "$force" = "true" ] || [ "$masternode" = "true" ] || [ "$info" = "true" ]; then
+    /bin/sh "$BASEDIR/tools/get-node-info.sh"
+    info "\
+    ** this node info was also saved into ./data/node.info ** \
+    "
+fi
+
+if  [ "$force" = "true" ] || [ "$status" = "true" ]; then 
+    LOCAL_HTTPS=$(curl -k "https://127.0.0.1/client" > /dev/null && echo "\033[0;32mOK\033[0m" || echo "\033[0;31mFAILED\033[0m")
+    if [ -z "$NODEID" ]; then 
+        if [ ! -f "$BASEDIR/remote-node.info" ]; then
+            NO_NODEID=true
+        else
+            NODEID=$(grep "NODEID: " "$BASEDIR/remote-node.info" | sed "s/NODEID: //g")
+        fi
+    fi
+    REMOTE_HTTPS=$(curl -k "https://$NODEID.remote.akroma.io/client" > /dev/null && echo "\033[0;32mOK\033[0m" || echo "\033[0;31mFAILED\033[0m")
+    SSL_VALID=$(curl "https://$NODEID.remote.akroma.io/client" > /dev/null && echo "\033[0;32mOK\033[0m" || echo "\033[0;31mFAILED\033[0m")
+
+    if [ "$NO_NODEID" = "true" ]; then
+        warn "Status check without NODEID is not complete, please provide '--nodeid=[NODEID]'" 
+    fi
+    echo "=============== RemoteNode STATUS ==============="
+    echo "LOCAL HTTPS CONNECTIVITY:  $LOCAL_HTTPS"
+    echo "REMOTE HTTPS CONNECTIVITY: $REMOTE_HTTPS"
+    echo "CERTIFICATES VALIDITY:     $SSL_VALID"
+    echo "================================================="
+fi
+
+if [ "$printCertbotOutput" = "true" ]; then
+    info "DNS TXT records not found, please register these dns records:"
+    CERTBOT_OUTPUT=$(grep -A2 'akroma.io' "$BASEDIR/letsencrypt/certbot/certbot.output" | sed "s/akroma.io.*/akroma.io/g" | sed '/^\s*$/d' | sed '/--$/d')
+    VALIDATION_URL_1=$(echo "$CERTBOT_OUTPUT" | sed '1q;d')
+    VALIDATION_TOKEN_1=$(echo "$CERTBOT_OUTPUT" | sed '2q;d')
+    VALIDATION_URL_2=$(echo "$CERTBOT_OUTPUT" | sed '3q;d')
+    VALIDATION_TOKEN_2=$(echo "$CERTBOT_OUTPUT" | sed '4q;d')
+    VALIDATION_1=$(dig -t txt "$VALIDATION_URL_1" +short | grep "$VALIDATION_TOKEN_1" > /dev/null && echo "true" || echo "false")
+    VALIDATION_2=$(dig -t txt "$VALIDATION_URL_2" +short | grep "$VALIDATION_TOKEN_2" > /dev/null && echo "true" || echo "false")
+    echo "URL: \"$VALIDATION_URL_1\" - TXT: \"$VALIDATION_TOKEN_1\""
+    echo "URL: \"$VALIDATION_URL_2\" - TXT: \"$VALIDATION_TOKEN_2\""
+elif [ "$certs" = "true" ]; then
+    success "Node SSL has valid SSL certificates."
+fi

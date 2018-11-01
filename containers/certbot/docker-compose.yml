@@ -1,0 +1,18 @@
+version: "2.4"
+services:
+  certbot:
+    restart: "no"
+    build: .
+    volumes:
+      - "../../letsencrypt:/etc/letsencrypt/:rw"
+      - "../../letsencrypt/certbot:/home/certbot/:rw"
+      - "./run.sh:/home/certbot/run.sh:ro"
+    environment:
+      - NODEID=nodeid
+      - email=dummy@example.com
+    cpus: '0.50'
+    mem_limit: '500M'
+    pids_limit: 75
+#    security_opt:
+#      - apparmor=certbot-armor
+
