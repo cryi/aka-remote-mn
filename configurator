@@ -179,11 +179,13 @@ parse_params() {
                 shift
                 ;;
             -au|--auto-update)
+                grantDocker=true
                 autoUpdate=true
                 shift
                 ;;
             -au=*|--auto-update=*)
                 autoUpdate=true
+                grantDocker=true
                 SPECIFIC_USER=$(echo $1 | sed 's/-au=//g')
                 SPECIFIC_USER=$(echo $SPECIFIC_USER | sed 's/--auto-update=//g')
                 shift
@@ -268,8 +270,7 @@ fi
 
 if [ "$user" = "true" ]; then
     require_root_priv
-    grep -q docker /etc/group || groupadd docker
-    id -u $USER > /dev/null || useradd $USER -m -s /bin/sh && usermod -a -G docker $USER
+    id -u $USER > /dev/null || useradd $USER -m -s /bin/sh
     id -u $USER > /dev/null && success "$USER created." || (error "Failed to create $USER" && exit 4)
 fi
 
