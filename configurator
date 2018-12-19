@@ -305,7 +305,7 @@ if [ "$force" = "true" ] || [ "$dependencies" = "true" ]; then
         -keyout "$BASEDIR/letsencrypt/privkey.pem" -out "$BASEDIR/letsencrypt/fullchain.pem" \
         -subj "/C=WW/ST=WW/L=WW/O=operator/CN=remote.akroma.io"
         warn "...dummy certificates created. Please remember, that they are not valid and cause ssl errors."
-        echo "These certificates are temporary and has to be replaced with valid ones to ensure proper functionality of RemoteNode" > rm -f "/etc/letsencrypt/temp.certs"
+        echo "These certificates are temporary and has to be replaced with valid ones to ensure proper functionality of RemoteNode" > "/etc/letsencrypt/temp.certs"
     fi
 fi
 
