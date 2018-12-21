@@ -38,6 +38,8 @@ Usage:
     -au=[user]|--auto-update=[user]     Adds cron job for auto update to SPECIFIC user crontable
                                         * requires docker rights for SPECIFIC user (use -gd=[user]|--grant-docker=[user])
     -s|--status                         tests and reports status of masternode
+    --verify-dns                        tests DNS TXT records propagation
+    -gfe|--generate-fake-enodeid        generates fake (temporary) enodeid for akroma.io submission
 
     EXAMPLES:
     # initial variable setup
@@ -115,23 +117,27 @@ set_certs_email() {
 }
 
 set_mn_nodeid() {
-    temp=$(sed "s/NODEID/$NODEID/g" "$AKA_CONF")
+    temp=$(sed "s/    server_name _ .*\.remote.akroma.io;/    server_name _ $NODEID.remote.akroma.io;/g" "$AKA_CONF")
+    temp=$(echo "$temp" | sed "s/\"id\":.*}';/\"id\":$NODEID}';/g" )
+    temp=$(echo "$temp" | sed "s/            return 200 .*\./            return 200 $NODEID\./g" )
     echo "$temp" > "$AKA_CONF"
+
     temp=$(sed "s/.*- NODEID=.*/      - NODEID=$NODEID/g" "$certbotComposeFile")
     echo "$temp" > "$certbotComposeFile"
 
-    grep "NODEID: " "$BASEDIR\remote-node.info" && \
-    (temp=$(sed "s/NODEID: .*/NODEID: $NODEID/g" "$BASEDIR\remote-node.info"); echo "$temp" > "$BASEDIR\remote-node.info") || \
-    echo "NODEID: $NODEID" >> "$BASEDIR\remote-node.info"
+    grep "NODEID: " "$BASEDIR/remote-node.info" && \
+    (temp=$(sed "s/NODEID: .*/NODEID: $NODEID/g" "$BASEDIR/remote-node.info"); echo "$temp" > "$BASEDIR/remote-node.info") || \
+    echo "NODEID: $NODEID" >> "$BASEDIR/remote-node.info"
 }
 
 set_mn_data() {
-    temp=$(sed "s/DATA/$DATAID/g" "$AKA_CONF")
+    temp=$(grep -oP "return 200 .*\." "$AKA_CONF")
+    temp=$(sed "s/$temp.*\;/$temp$DATAID;/g" "$AKA_CONF")
     echo "$temp" > "$AKA_CONF"
 
-    grep "DATA: " "$BASEDIR\remote-node.info" && \
-    (temp=$(sed "s/DATA: .*/DATA: $DATAID/g" "$BASEDIR\remote-node.info"); echo "$temp" > "$BASEDIR\remote-node.info") || \
-    echo "DATA: $DATAID" >> "$BASEDIR\remote-node.info"
+    grep "DATA: " "$BASEDIR/remote-node.info" && \
+    (temp=$(sed "s/DATA: .*/DATA: $DATAID/g" "$BASEDIR/remote-node.info"); echo "$temp" > "$BASEDIR/remote-node.info") || \
+    echo "DATA: $DATAID" >> "$BASEDIR/remote-node.info"
 }
 
 set_mn_port() {
@@ -142,6 +148,22 @@ set_mn_port() {
 get_certs() {
     docker-compose -f "$certbotComposeFile" run certbot
     return $?
+}
+
+verify_dns_records() {
+    if [ ! -f "$BASEDIR/letsencrypt/certbot/certbot.output" ]; then
+        error "certbot.output not found..."
+        info "Run `./configurator -c`"
+    fi
+    CERTBOT_OUTPUT=$(grep -A 2 'akroma.io' "$BASEDIR/letsencrypt/certbot/certbot.output" | sed "s/akroma.io.*/akroma.io/g" | sed '/^\s*$/d' | sed '/--$/d')
+    VALIDATION_URL_1=$(echo "$CERTBOT_OUTPUT" | sed '1q;d')
+    VALIDATION_TOKEN_1=$(echo "$CERTBOT_OUTPUT" | sed '2q;d')
+    VALIDATION_URL_2=$(echo "$CERTBOT_OUTPUT" | sed '3q;d')
+    VALIDATION_TOKEN_2=$(echo "$CERTBOT_OUTPUT" | sed '4q;d')
+    VALIDATION_1=$(dig -t txt "$VALIDATION_URL_1" +short | grep -- "$VALIDATION_TOKEN_1" > /dev/null && echo "propagated" || echo "missing")
+    VALIDATION_2=$(dig -t txt "$VALIDATION_URL_2" +short | grep -- "$VALIDATION_TOKEN_2" > /dev/null && echo "propagated" || echo "missing")
+    echo "URL: \"$VALIDATION_URL_1\" - TXT: \"$VALIDATION_TOKEN_1\" - STATUS: \"$VALIDATION_1\""
+    echo "URL: \"$VALIDATION_URL_2\" - TXT: \"$VALIDATION_TOKEN_2\" - STATUS: \"$VALIDATION_2\""
 }
 
 parse_params() {
@@ -252,6 +274,14 @@ parse_params() {
                 status=true
                 shift
                 ;;
+            --verify-dns)
+                verifyDNSRecords=true
+                shift
+                ;;
+            -gfe|--generate-fake-enodeid)
+                generateFakeEnodeId=true
+                shift
+                ;;
             -?*)
                 echo "Invalid parameter was provided: $1"
                 exit 2
@@ -274,7 +304,11 @@ if [ "$user" = "true" ]; then
     id -u $USER > /dev/null && success "$USER created." || (error "Failed to create $USER" && exit 4)
 fi
 
-if [ ! -z "$port" ]; then 
+if [ ! -z "$port" ]; then
+    if [ "$port" = "443" ] || [ "$port" = "80" ]; then 
+        error "RPC port can not be set to port 80 or 443, because these ports are reserved for remote node web service."
+        exit 9
+    fi
     set_mn_port $port
     grep "\- \"$port:8545\"" $composeFile > /dev/null && success "MN port set to $port" || (error "Failed to set MN port to $port" && exit 5)
 fi
@@ -305,7 +339,7 @@ if [ "$force" = "true" ] || [ "$dependencies" = "true" ]; then
         -keyout "$BASEDIR/letsencrypt/privkey.pem" -out "$BASEDIR/letsencrypt/fullchain.pem" \
         -subj "/C=WW/ST=WW/L=WW/O=operator/CN=remote.akroma.io"
         warn "...dummy certificates created. Please remember, that they are not valid and cause ssl errors."
-        echo "These certificates are temporary and has to be replaced with valid ones to ensure proper functionality of RemoteNode" > "/etc/letsencrypt/temp.certs"
+        echo "These certificates are temporary and has to be replaced with valid ones to ensure proper functionality of RemoteNode" > "$BASEDIR/letsencrypt/temp.certs"
     fi
 fi
 
@@ -330,7 +364,7 @@ fi
 
 if [ ! -z "$EMAIL" ]; then 
     set_certs_email
-    grep "      - email=$EMAIL" "$certbotComposeFile" > /dev/null && success "RemoteNode EMAIL set to $NODEID" || (error "Failed to set RemoteNode EMAIL to $NODEID" && exit 7)
+    grep "      - email=$EMAIL" "$certbotComposeFile" > /dev/null && success "RemoteNode EMAIL set to $EMAIL" || (error "Failed to set RemoteNode EMAIL to $EMAIL" && exit 7)
 fi
 
 if [ "$grantDocker" = "true" ]; then
@@ -460,15 +494,15 @@ fi
 
 if [ "$printCertbotOutput" = "true" ]; then
     info "DNS TXT records not found, please register these dns records:"
-    CERTBOT_OUTPUT=$(grep -A2 'akroma.io' "$BASEDIR/letsencrypt/certbot/certbot.output" | sed "s/akroma.io.*/akroma.io/g" | sed '/^\s*$/d' | sed '/--$/d')
-    VALIDATION_URL_1=$(echo "$CERTBOT_OUTPUT" | sed '1q;d')
-    VALIDATION_TOKEN_1=$(echo "$CERTBOT_OUTPUT" | sed '2q;d')
-    VALIDATION_URL_2=$(echo "$CERTBOT_OUTPUT" | sed '3q;d')
-    VALIDATION_TOKEN_2=$(echo "$CERTBOT_OUTPUT" | sed '4q;d')
-    VALIDATION_1=$(dig -t txt "$VALIDATION_URL_1" +short | grep "$VALIDATION_TOKEN_1" > /dev/null && echo "true" || echo "false")
-    VALIDATION_2=$(dig -t txt "$VALIDATION_URL_2" +short | grep "$VALIDATION_TOKEN_2" > /dev/null && echo "true" || echo "false")
-    echo "URL: \"$VALIDATION_URL_1\" - TXT: \"$VALIDATION_TOKEN_1\""
-    echo "URL: \"$VALIDATION_URL_2\" - TXT: \"$VALIDATION_TOKEN_2\""
+fi 
+
+if [ "$verifyDNSRecords" = "true" ] || [ "$printCertbotOutput" = "true" ]; then
+    verify_dns_records
 elif [ "$certs" = "true" ]; then
     success "Node SSL has valid SSL certificates."
+fi
+
+if [ "$generateFakeEnodeId" = "true" ]; then 
+    fakeID=$(hexdump -n 64 -v -e '"" 3/1 "%02X" ""' /dev/urandom)
+    info "fake enodeid: $fakeID"
 fi

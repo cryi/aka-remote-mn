@@ -8,7 +8,7 @@ services:
       - "./data:/home/akroma/.akroma:rw"
     pids_limit: 75
     ports:
-      - "10000:8545"
+      - "8545:8545"
       - "30303:30303"
 #    security_opt:
 #      - apparmor=aka-armor

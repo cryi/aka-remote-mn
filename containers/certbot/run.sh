@@ -3,7 +3,7 @@
 if [ -f "/etc/letsencrypt/privkey.pem" ] && [ -f "/etc/letsencrypt/fullchain.pem" ] && [ ! -f "/etc/letsencrypt/temp.certs" ]; then
         /usr/bin/certbot renew --no-self-upgrade --config-dir /home/certbot/ --work-dir /home/certbot/ --logs-dir /home/certbot/
 else
-        printf "N\n" | /usr/bin/certbot certonly --manual --preferred-challenges dns --force-interactive --agree-tos \
+        printf "NN\n" | /usr/bin/certbot certonly --manual --preferred-challenges dns --force-interactive --agree-tos \
         -d remote.akroma.io -d $NODEID.remote.akroma.io --manual-public-ip-logging-ok --email=$email \
         --config-dir /home/certbot/ --work-dir /home/certbot/ --logs-dir /home/certbot/ > certbot.output &
 
@@ -11,13 +11,13 @@ else
         sleep 25
         kill -INT $! > /dev/null
 
-        CERTBOT_OUTPUT=$(grep -A2 'akroma.io' certbot.output | sed "s/akroma.io.*/akroma.io/g" | sed '/^\s*$/d' | sed '/--$/d')
+        CERTBOT_OUTPUT=$(grep -A 2 'akroma.io' certbot.output | sed "s/akroma.io.*/akroma.io/g" | sed '/^\s*$/d' | sed '/--$/d')
         VALIDATION_URL_1=$(echo "$CERTBOT_OUTPUT" | sed '1q;d')
         VALIDATION_TOKEN_1=$(echo "$CERTBOT_OUTPUT" | sed '2q;d')
         VALIDATION_URL_2=$(echo "$CERTBOT_OUTPUT" | sed '3q;d')
         VALIDATION_TOKEN_2=$(echo "$CERTBOT_OUTPUT" | sed '4q;d')
-        VALIDATION_1=$(dig -t txt "$VALIDATION_URL_1" +short | grep "$VALIDATION_TOKEN_1" > /dev/null && echo "true" || echo "false")
-        VALIDATION_2=$(dig -t txt "$VALIDATION_URL_2" +short | grep "$VALIDATION_TOKEN_2" > /dev/null && echo "true" || echo "false")
+        VALIDATION_1=$(dig -t txt "$VALIDATION_URL_1" +short | grep -- "$VALIDATION_TOKEN_1" > /dev/null && echo "true" || echo "false")
+        VALIDATION_2=$(dig -t txt "$VALIDATION_URL_2" +short | grep -- "$VALIDATION_TOKEN_2" > /dev/null && echo "true" || echo "false")
 
         if [ -z "$VALIDATION_URL_1" ] || [ -z "$VALIDATION_URL_2" ]; then
                 cat certbot.output | echo
