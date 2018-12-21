@@ -14,18 +14,19 @@ Usage:
     -h|--help                           Displays this help message.
 
     -dau|--disable-auto-update          Removes auto update from cron job
-    -gd|--grant-docker                  Adds CURRENT user into docker group, so you can control docker without sudo and autoupdate
-    -gd=[user]|--grant-docker=[user]    Adds SPECIFIC user into docker group, so you can control docker without sudo and autoupdate
     --nodeid=[nodeid]                   Sets RemoteNode NODEID to [nodeid]
     --data=[data]                       Sets RemoteNode DATA to [data]
     -p=[port]|--port=[port]             Sets MN rpc listening port to [port]
     --user=[user]                       Creates user if not exists and starts docker from this user. (docker rights are asigned automatically)
     --email=[email]                     Sets email used to obtain valid certificates *REQUIRED ONCE*
+    -gfe|--generate-fake-enodeid        generates fake (temporary) enodeid for akroma.io submission
 
     -f|--full                           Runs all of the commands below.
 
     -sd|--setup-dependencies            Installs masternode dependencies
     -mn|--setup-masternode              Rebuilds and starts masternode
+    -gd|--grant-docker                  Adds CURRENT user into docker group, so you can control docker without sudo and autoupdate
+    -gd=[user]|--grant-docker=[user]    Adds SPECIFIC user into docker group, so you can control docker without sudo and autoupdate
     -c|--certificates                   Tryes to get valid certificates/displayes challenge
     -rb|--rebuild                       Same as -mn|--setup-masternode 
     -nc|--no-cache                      Affects MN build
@@ -39,7 +40,6 @@ Usage:
                                         * requires docker rights for SPECIFIC user (use -gd=[user]|--grant-docker=[user])
     -s|--status                         tests and reports status of masternode
     --verify-dns                        tests DNS TXT records propagation
-    -gfe|--generate-fake-enodeid        generates fake (temporary) enodeid for akroma.io submission
 
     EXAMPLES:
     # initial variable setup
@@ -95,6 +95,8 @@ build_mn() {
     if [ ! "$user" = "true" ]; then
         require_docker_priv
         docker-compose -f "$composeFile" build $noCache
+    else 
+        runuser -l $USER -c "sh \"$PATHTOCONFIGURATOR\" -mn"
     fi
 }
 
@@ -108,6 +110,8 @@ start_mn() {
         # update node info
         $BASEDIR/tools/get-node-info.sh > /dev/null
         info=true
+    else 
+        runuser -l $USER -c "sh \"$PATHTOCONFIGURATOR\" -r"
     fi
 }
 
@@ -160,8 +164,8 @@ verify_dns_records() {
     VALIDATION_TOKEN_1=$(echo "$CERTBOT_OUTPUT" | sed '2q;d')
     VALIDATION_URL_2=$(echo "$CERTBOT_OUTPUT" | sed '3q;d')
     VALIDATION_TOKEN_2=$(echo "$CERTBOT_OUTPUT" | sed '4q;d')
-    VALIDATION_1=$(dig -t txt "$VALIDATION_URL_1" +short | grep -- "$VALIDATION_TOKEN_1" > /dev/null && echo "propagated" || echo "missing")
-    VALIDATION_2=$(dig -t txt "$VALIDATION_URL_2" +short | grep -- "$VALIDATION_TOKEN_2" > /dev/null && echo "propagated" || echo "missing")
+    VALIDATION_1=$(dig -t txt "$VALIDATION_URL_1" @1.1.1.1 +short | grep -- "$VALIDATION_TOKEN_1" > /dev/null && echo "propagated" || echo "missing")
+    VALIDATION_2=$(dig -t txt "$VALIDATION_URL_2" @1.1.1.1 +short | grep -- "$VALIDATION_TOKEN_2" > /dev/null && echo "propagated" || echo "missing")
     echo "URL: \"$VALIDATION_URL_1\" - TXT: \"$VALIDATION_TOKEN_1\" - STATUS: \"$VALIDATION_1\""
     echo "URL: \"$VALIDATION_URL_2\" - TXT: \"$VALIDATION_TOKEN_2\" - STATUS: \"$VALIDATION_2\""
 }
@@ -298,12 +302,14 @@ if [ ! -z "$SPECIFIC_USER" ]; then
     USER=$SPECIFIC_USER 
 fi
 
+# Sets USER
 if [ "$user" = "true" ]; then
     require_root_priv
     id -u $USER > /dev/null || useradd $USER -m -s /bin/sh
     id -u $USER > /dev/null && success "$USER created." || (error "Failed to create $USER" && exit 4)
 fi
 
+# Configures RPC port
 if [ ! -z "$port" ]; then
     if [ "$port" = "443" ] || [ "$port" = "80" ]; then 
         error "RPC port can not be set to port 80 or 443, because these ports are reserved for remote node web service."
@@ -313,6 +319,7 @@ if [ ! -z "$port" ]; then
     grep "\- \"$port:8545\"" $composeFile > /dev/null && success "MN port set to $port" || (error "Failed to set MN port to $port" && exit 5)
 fi
 
+# Installs dependencies
 if [ "$force" = "true" ] || [ "$dependencies" = "true" ]; then
     require_root_priv
     apt update && apt upgrade -q -y
@@ -343,6 +350,7 @@ if [ "$force" = "true" ] || [ "$dependencies" = "true" ]; then
     fi
 fi
 
+# Restores folder and file permissions
 if [ "$force" = "true" ] || [ "$restorePermisions" = "true" ]; then
     require_root_priv
     chmod +x "$PATHTOCONFIGURATOR" \
@@ -352,22 +360,26 @@ if [ "$force" = "true" ] || [ "$restorePermisions" = "true" ]; then
     "$BASEDIR/tools/allow-container-write.sh" -f -p "$BASEDIR/letsencrypt"
 fi
 
+# Sets NODEID
 if [ ! -z "$NODEID" ]; then 
     set_mn_nodeid
     (grep "return 200 $NODEID." $AKA_CONF > /dev/null && grep "      - NODEID=$NODEID" "$certbotComposeFile" > /dev/null) && success "RemoteNode NODEID set to $NODEID" || (error "Failed to set RemoteNode NODEID to $NODEID" && exit 5)
 fi
 
+# Sets TRANSACTION DATA
 if [ ! -z "$DATAID" ]; then 
     set_mn_data
     grep ".$DATAID;" $AKA_CONF > /dev/null && success "RemoteNode DATA set to $DATAID" || (error "Failed to set RemoteNode DATA to $DATAID" && exit 6)
 fi
 
+# Sets email
 if [ ! -z "$EMAIL" ]; then 
     set_certs_email
     grep "      - email=$EMAIL" "$certbotComposeFile" > /dev/null && success "RemoteNode EMAIL set to $EMAIL" || (error "Failed to set RemoteNode EMAIL to $EMAIL" && exit 7)
 fi
 
-if [ "$grantDocker" = "true" ]; then
+# Grants docker privilages to user
+if [ "$force" = "true" ] && [ ! "$disableAutoUpdate" = "true" ] || [ "$grantDocker" = "true" ]; then
     if [ "$(groups $USER | grep "docker" || echo "true")" = "true" ] && [ "$(groups $USER | grep "root" || echo "true")" = "true" ]; then
         require_root_priv
         usermod -a -G docker $USER
@@ -381,6 +393,7 @@ if [ "$grantDocker" = "true" ]; then
     fi
 fi
 
+# Requests certificates
 if [ "$force" = "true" ] || [ "$certs" = "true" ]; then
     require_docker_priv
     get_certs
@@ -399,14 +412,17 @@ if [ "$force" = "true" ] || [ "$certs" = "true" ]; then
     fi
 fi
 
+# builds masternode
 if [ "$force" = "true" ] || [ "$build" = "true" ]; then
     build_mn
 fi
 
+# starts masternode
 if [ "$force" = "true" ] || [ "$start" = "true" ]; then
     start_mn
 fi
 
+# Updates to latest STABLE version of akroma geth
 if [ "$update" = "true" ]; then
     require_docker_priv
     echo "Checking for update..."
@@ -434,6 +450,7 @@ if [ "$update" = "true" ]; then
     fi
 fi
 
+# Setups auto update
 if [ "$force" = "true" ] || [ "$autoUpdate" = "true" ]; then
     if [ ! "$disableAutoUpdate" = "true" ]; then
         crontab -u $USER -l > "temp.cron"
@@ -448,21 +465,13 @@ if [ "$force" = "true" ] || [ "$autoUpdate" = "true" ]; then
     fi
 fi
 
+# Disables auto update
 if [ "$disableAutoUpdate" = "true" ]; then
     crontab -u $USER -l | grep -v "\"$PATHTOCONFIGURATOR\" -u -c" | crontab -u $USER -
     crontab -u $USER -l | grep "\"$PATHTOCONFIGURATOR\" -u -c" && error "Failed to disable auto update." || success "Auto updated disabled" 
 fi
 
-if [ "$user" = "true" ]; then
-    if [ "$force" = "true" ] || [ "$build" = "true" ]; then
-        runuser -l $USER -c "sh \"$PATHTOCONFIGURATOR\" -mn"
-        exit 0
-    elif [ "$start" = "true" ]; then
-        runuser -l $USER -c "sh \"$PATHTOCONFIGURATOR\" -s"
-        exit 0
-    fi
-fi
-
+# Prints MN details
 if [ "$force" = "true" ] || [ "$masternode" = "true" ] || [ "$info" = "true" ]; then
     /bin/sh "$BASEDIR/tools/get-node-info.sh"
     info "\
@@ -470,6 +479,7 @@ if [ "$force" = "true" ] || [ "$masternode" = "true" ] || [ "$info" = "true" ]; 
     "
 fi
 
+# Testing node status
 if  [ "$force" = "true" ] || [ "$status" = "true" ]; then 
     LOCAL_HTTPS=$(curl -k "https://127.0.0.1/client" > /dev/null && echo "\033[0;32mOK\033[0m" || echo "\033[0;31mFAILED\033[0m")
     if [ -z "$NODEID" ]; then 
@@ -496,12 +506,14 @@ if [ "$printCertbotOutput" = "true" ]; then
     info "DNS TXT records not found, please register these dns records:"
 fi 
 
+# Verifies DNS Record propagation and prints status
 if [ "$verifyDNSRecords" = "true" ] || [ "$printCertbotOutput" = "true" ]; then
     verify_dns_records
 elif [ "$certs" = "true" ]; then
     success "Node SSL has valid SSL certificates."
 fi
 
+# Generates fake enodeid
 if [ "$generateFakeEnodeId" = "true" ]; then 
     fakeID=$(hexdump -n 64 -v -e '"" 3/1 "%02X" ""' /dev/urandom)
     info "fake enodeid: $fakeID"

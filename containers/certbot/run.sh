@@ -3,7 +3,7 @@
 if [ -f "/etc/letsencrypt/privkey.pem" ] && [ -f "/etc/letsencrypt/fullchain.pem" ] && [ ! -f "/etc/letsencrypt/temp.certs" ]; then
         /usr/bin/certbot renew --no-self-upgrade --config-dir /home/certbot/ --work-dir /home/certbot/ --logs-dir /home/certbot/
 else
-        printf "NN\n" | /usr/bin/certbot certonly --manual --preferred-challenges dns --force-interactive --agree-tos \
+        printf "NN" | /usr/bin/certbot certonly --manual --preferred-challenges dns --force-interactive --agree-tos \
         -d remote.akroma.io -d $NODEID.remote.akroma.io --manual-public-ip-logging-ok --email=$email \
         --config-dir /home/certbot/ --work-dir /home/certbot/ --logs-dir /home/certbot/ > certbot.output &
 
@@ -16,8 +16,8 @@ else
         VALIDATION_TOKEN_1=$(echo "$CERTBOT_OUTPUT" | sed '2q;d')
         VALIDATION_URL_2=$(echo "$CERTBOT_OUTPUT" | sed '3q;d')
         VALIDATION_TOKEN_2=$(echo "$CERTBOT_OUTPUT" | sed '4q;d')
-        VALIDATION_1=$(dig -t txt "$VALIDATION_URL_1" +short | grep -- "$VALIDATION_TOKEN_1" > /dev/null && echo "true" || echo "false")
-        VALIDATION_2=$(dig -t txt "$VALIDATION_URL_2" +short | grep -- "$VALIDATION_TOKEN_2" > /dev/null && echo "true" || echo "false")
+        VALIDATION_1=$(dig -t txt "$VALIDATION_URL_1" @1.1.1.1 +short | grep -- "$VALIDATION_TOKEN_1" > /dev/null && echo "true" || echo "false")
+        VALIDATION_2=$(dig -t txt "$VALIDATION_URL_2" @1.1.1.1 +short | grep -- "$VALIDATION_TOKEN_2" > /dev/null && echo "true" || echo "false")
 
         if [ -z "$VALIDATION_URL_1" ] || [ -z "$VALIDATION_URL_2" ]; then
                 cat certbot.output | echo
@@ -40,10 +40,10 @@ fi;
 
 newPath=$(ls -t /home/certbot/live | head -1)
 
-privkeyHash=$(sha1sum /home/certbot/live/$newPath/privkey.pem | awk '{ print $1 }')
-privkeyHash2=$(sha1sum /etc/letsencrypt/privkey.pem | awk '{ print $1 }')
-fullchainHash=$(sha1sum /home/certbot/live/$newPath/fullchain.pem | awk '{ print $1 }')
-fullchainHash2=$(sha1sum /etc/letsencrypt/fullchain.pem | awk '{ print $1 }')
+privkeyHash=$(sha256sum /home/certbot/live/$newPath/privkey.pem | awk '{ print $1 }')
+privkeyHash2=$(sha256sum /etc/letsencrypt/privkey.pem | awk '{ print $1 }')
+fullchainHash=$(sha256sum /home/certbot/live/$newPath/fullchain.pem | awk '{ print $1 }')
+fullchainHash2=$(sha256sum /etc/letsencrypt/fullchain.pem | awk '{ print $1 }')
 
 returnval=0
 if [ ! -f "/etc/letsencrypt/fullchain.pem" ] || [ ! "$fullchainHash" = "$fullchainHash2" ]; then
