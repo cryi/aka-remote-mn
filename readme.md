@@ -2,10 +2,11 @@
 
 ### Automated setup (ubuntu and derivatives with apt & sudo)
 
+Note: *All parameters inside [] has to be submitted without [], e.g. `--user=[user]` as `--user=akroma`*
 0. `git clone "https://github.com/cryi/aka-remote-mn.git" && cd aka-remote-mn`
 1. `sudo chmod +x ./configurator`
-2. generate fake enodeid and use it to register remote node in akroma.io 
-    `./configurator --generate-fake-enodeid` 
+2. generate temporary enodeid and use it to register remote node in akroma.io 
+    `./configurator --generate-temporary-enodeid` 
 3. Fill data and nodeid from akroma.io and your email for obtaining letsencrypt certificates and optinaly port
     `./configurator --data=[data] --nodeid=[nodeid] --email=[email] --port=[port]`
     - data is **TRANSACTION DATA**
@@ -17,7 +18,7 @@
     - setup outputs node info at the end, you can also find it inside file `./data/node.info` (`cat ./data/node.info`)
     - setup also outputs DNS TXT records
     - user (optional) is user used to execute and update MN
-5. Submit dns TXT challenge to akroma.io
+5. Submit dns TXT challenge to akroma.io 
     - you can find it at the end of setup (if it is not found in DNS records)
     - you can find it also in `./letsencrypt/certbot/certbot.output`
 6. Verify DNS TXT records propagation (takes up to 3 hours to propagate)

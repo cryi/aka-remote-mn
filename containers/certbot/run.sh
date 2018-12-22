@@ -31,7 +31,7 @@ else
                 -d remote.akroma.io -d $NODEID.remote.akroma.io --manual-public-ip-logging-ok --email=$email \
                 --config-dir /home/certbot/ --work-dir /home/certbot/ --logs-dir /home/certbot/
         else
-                echo "DNS TXT records not found, please register these dns records:"
+                echo "DNS TXT records not found, please register these dns records (on akroma.io):"
                 echo "URL: \"$VALIDATION_URL_1\" - TXT: \"$VALIDATION_TOKEN_1\""
                 echo "URL: \"$VALIDATION_URL_2\" - TXT: \"$VALIDATION_TOKEN_2\""
                 exit 2
