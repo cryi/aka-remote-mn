@@ -1,3 +1,5 @@
+(Deprecated) It is not possible to create AKA masternodes anymore. Setup will be updated, once AKA team implements necessary changes for masternodes to return. (*You can still use this setup to setup standard akroma node - no rewards - to support AKA decentralization.*)
+
 ## AKROMA REMOTE MASTERNODE SETUP © cryon.io 2018
 
 ### Automated setup (ubuntu and derivatives with apt & sudo)
